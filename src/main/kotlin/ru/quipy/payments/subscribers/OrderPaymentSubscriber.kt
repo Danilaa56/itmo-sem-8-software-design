@@ -19,6 +19,7 @@ import ru.quipy.streams.annotation.RetryConf
 import ru.quipy.streams.annotation.RetryFailedStrategy
 import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import javax.annotation.PostConstruct
 
 @Service
@@ -34,12 +35,19 @@ class OrderPaymentSubscriber {
 
     @Autowired
     @Qualifier(ExternalServicesConfig.PRIMARY_PAYMENT_BEAN)
-    private lateinit var paymentService: PaymentService
+    private lateinit var paymentService1: PaymentService
+
+    @Autowired
+    @Qualifier(ExternalServicesConfig.SECONDARY_PAYMENT_BEAN)
+    private lateinit var paymentService2: PaymentService
 
     private val paymentExecutor = Executors.newFixedThreadPool(16, NamedThreadFactory("payment-executor"))
 
     @PostConstruct
     fun init() {
+        val paymentServices = arrayOf(paymentService2, paymentService1)
+        val currentRequestCounts = arrayOf(AtomicInteger(), AtomicInteger())
+
         subscriptionsManager.createSubscriber(OrderAggregate::class, "payments:order-subscriber", retryConf = RetryConf(1, RetryFailedStrategy.SKIP_EVENT)) {
             `when`(OrderPaymentStartedEvent::class) { event ->
                 paymentExecutor.submit {
@@ -52,7 +60,20 @@ class OrderPaymentSubscriber {
                     }
                     logger.info("Payment ${createdEvent.paymentId} for order ${event.orderId} created.")
 
-                    paymentService.submitPaymentRequest(createdEvent.paymentId, event.amount, event.createdAt)
+                    var submitted = false
+                    while (!submitted) {
+                        for (it in paymentServices) {
+                            try {
+                                if (it.submitPaymentRequest(createdEvent.paymentId, event.amount, event.createdAt)) {
+                                    submitted = true
+                                    break
+                                }
+                            } catch (e: Exception) {
+                                submitted = true
+                                throw e
+                            }
+                        }
+                    }
                 }
             }
         }

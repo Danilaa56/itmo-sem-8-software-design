@@ -8,17 +8,20 @@ import okhttp3.Request
 import okhttp3.RequestBody
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import ru.quipy.common.utils.NonBlockingOngoingWindow
+import ru.quipy.common.utils.RateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 
 // Advice: always treat time as a Duration
 class PaymentExternalServiceImpl(
-    private val properties: ExternalServiceProperties,
+        private val properties: ExternalServiceProperties,
 ) : PaymentExternalService {
 
     companion object {
@@ -36,6 +39,10 @@ class PaymentExternalServiceImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
+    private val curRequestsCount = AtomicInteger()
+    private val nonBlockingOngoingWindow = NonBlockingOngoingWindow(properties.parallelRequests)
+    private val rateLimiter = RateLimiter(properties.rateLimitPerSec)
+
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
 
@@ -46,7 +53,57 @@ class PaymentExternalServiceImpl(
         build()
     }
 
-    override fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long) {
+    override fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long): Boolean {
+        val weHaveTime = paymentOperationTimeout.toMillis() - (now() - paymentStartedAt) - 5000
+        if (requestAverageProcessingTime.toMillis() > weHaveTime) {
+            return false
+        }
+        if (nonBlockingOngoingWindow.putIntoWindow() !is NonBlockingOngoingWindow.WindowResponse.Success) {
+            return false;
+        }
+        try {
+            if (!rateLimiter.tick()) {
+                return false
+            }
+            submitPaymentRequestActual(paymentId, amount, paymentStartedAt)
+            return true
+        } finally {
+            nonBlockingOngoingWindow.releaseWindow()
+        }
+//        while (true) {
+//            val cur = curRequestsCount.get()
+//            if (cur >= parallelRequests) {
+//                return false
+//            }
+//
+//            val weHaveTime = paymentOperationTimeout.toMillis() - (now() - paymentStartedAt) - 10000
+//            if (requestAverageProcessingTime.toMillis() > weHaveTime) {
+//                return false
+//            }
+////            if (requestAverageProcessingTime
+////                            .multipliedBy(cur.toLong())
+////                            .dividedBy(rateLimitPerSec.toLong())
+////                            .plus(requestAverageProcessingTime.multipliedBy(2))
+////                            .plusMillis(now())
+////                            .toMillis() > paymentOperationTimeout.plusMillis(paymentStartedAt).toMillis()) {
+////                return false
+////            }
+//
+//
+//            // Accept submission
+//            if (curRequestsCount.compareAndSet(cur, cur + 1)) {
+//                break
+//            }
+//        }
+//        try {
+//            submitPaymentRequestActual(paymentId, amount, paymentStartedAt)
+//            return true
+//        } finally {
+//            curRequestsCount.decrementAndGet()
+//        }
+    }
+
+    fun submitPaymentRequestActual(paymentId: UUID, amount: Int, paymentStartedAt: Long) {
         logger.warn("[$accountName] Submitting payment request for payment $paymentId. Already passed: ${now() - paymentStartedAt} ms")
 
         val transactionId = UUID.randomUUID()
