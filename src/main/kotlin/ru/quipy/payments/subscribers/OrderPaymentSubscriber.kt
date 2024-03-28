@@ -41,12 +41,11 @@ class OrderPaymentSubscriber {
     @Qualifier(ExternalServicesConfig.SECONDARY_PAYMENT_BEAN)
     private lateinit var paymentService2: PaymentService
 
-    private val paymentExecutor = Executors.newFixedThreadPool(16, NamedThreadFactory("payment-executor"))
+    private val paymentExecutor = Executors.newFixedThreadPool(400, NamedThreadFactory("payment-executor"))
 
     @PostConstruct
     fun init() {
         val paymentServices = arrayOf(paymentService2, paymentService1)
-        val currentRequestCounts = arrayOf(AtomicInteger(), AtomicInteger())
 
         subscriptionsManager.createSubscriber(OrderAggregate::class, "payments:order-subscriber", retryConf = RetryConf(1, RetryFailedStrategy.SKIP_EVENT)) {
             `when`(OrderPaymentStartedEvent::class) { event ->
@@ -60,11 +59,13 @@ class OrderPaymentSubscriber {
                     }
                     logger.info("Payment ${createdEvent.paymentId} for order ${event.orderId} created.")
 
+//                    paymentService1.submitPaymentRequest(createdEvent.paymentId, event.amount, event.createdAt)
+
                     var submitted = false
                     while (!submitted) {
-                        for (it in paymentServices) {
+                        for (paymentService in paymentServices) {
                             try {
-                                if (it.submitPaymentRequest(createdEvent.paymentId, event.amount, event.createdAt)) {
+                                if (paymentService.submitPaymentRequest(createdEvent.paymentId, event.amount, event.createdAt)) {
                                     submitted = true
                                     break
                                 }

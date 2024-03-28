@@ -15,6 +15,7 @@ import ru.quipy.payments.api.PaymentAggregate
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -46,7 +47,7 @@ class PaymentExternalServiceImpl(
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
 
-    private val httpClientExecutor = Executors.newSingleThreadExecutor()
+    private val httpClientExecutor = Executors.newFixedThreadPool(16)
 
     private val client = OkHttpClient.Builder().run {
         dispatcher(Dispatcher(httpClientExecutor))
@@ -54,12 +55,15 @@ class PaymentExternalServiceImpl(
     }
 
     override fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long): Boolean {
+//        if (accountName.equals("default-2")) {
+//            return false
+//        }
         val weHaveTime = paymentOperationTimeout.toMillis() - (now() - paymentStartedAt) - 5000
         if (requestAverageProcessingTime.toMillis() > weHaveTime) {
             return false
         }
         if (nonBlockingOngoingWindow.putIntoWindow() !is NonBlockingOngoingWindow.WindowResponse.Success) {
-            return false;
+            return false
         }
         try {
             if (!rateLimiter.tick()) {
