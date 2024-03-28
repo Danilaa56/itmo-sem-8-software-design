@@ -38,6 +38,13 @@ class OrderPaymentSubscriber {
 
     private val paymentExecutor = Executors.newFixedThreadPool(16, NamedThreadFactory("payment-executor"))
 
+    /*
+        <- payments
+        LinkedQueue | paymentExecutor->paymentService.submitPaymentRequest->client.newCall(request).enqueue
+        <- http requests to external payments service
+        LinkedQueue | httpClientExecutor->send http->processResponse->ok
+     */
+
     @PostConstruct
     fun init() {
         subscriptionsManager.createSubscriber(OrderAggregate::class, "payments:order-subscriber", retryConf = RetryConf(1, RetryFailedStrategy.SKIP_EVENT)) {

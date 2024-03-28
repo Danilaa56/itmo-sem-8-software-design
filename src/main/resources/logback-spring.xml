@@ -7,17 +7,17 @@
         <springProperty name="service" source="spring.application.name"/>
         <springProperty name="logstashUrl" source="logstash.url"/>
 
-        <logger name="ru.quipy" level="WARN"/>
+        <logger name="ru.quipy" level="INFO"/>
 
-        <root level="WARN">
+        <root level="INFO">
             <appender-ref ref="CONSOLE"/>
         </root>
     </springProfile>
 
     <springProfile name="dev">
-        <logger name="ru.quipy" level="WARN"/>
+        <logger name="ru.quipy" level="INFO"/>
 
-        <root level="WARN">
+        <root level="INFO">
             <appender-ref ref="CONSOLE"/>
         </root>
     </springProfile>
