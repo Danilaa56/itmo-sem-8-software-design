@@ -11,9 +11,7 @@ import ru.quipy.orders.api.OrderAggregate
 import ru.quipy.orders.api.OrderPaymentStartedEvent
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.config.ExternalServicesConfig
-import ru.quipy.payments.logic.PaymentAggregateState
-import ru.quipy.payments.logic.PaymentService
-import ru.quipy.payments.logic.create
+import ru.quipy.payments.logic.*
 import ru.quipy.streams.AggregateSubscriptionsManager
 import ru.quipy.streams.annotation.RetryConf
 import ru.quipy.streams.annotation.RetryFailedStrategy
@@ -73,10 +71,20 @@ class OrderPaymentSubscriber {
 
                     val chosenPaymentService = if (paymentService2.canProcess(createdEvent.paymentId, event.amount, event.createdAt)) {
                         paymentService2
-                    } else {
+                    } else if (paymentService1.canProcess(createdEvent.paymentId, event.amount, event.createdAt)) {
                         paymentService1
+                    } else {
+                        null
                     }
-                    chosenPaymentService.submitPaymentRequest(createdEvent.paymentId, event.amount, event.createdAt)
+                    if (chosenPaymentService != null) {
+                        chosenPaymentService.submitPaymentRequest(createdEvent.paymentId, event.amount, event.createdAt)
+                    } else {
+                        logger.error("Could not choose account for payment: ${createdEvent.paymentId}")
+
+                        paymentESService.update(createdEvent.paymentId) {
+                            it.logProcessing(false, now(), null, reason = "Could not choose account for payment")
+                        }
+                    }
                 }
             }
         }
