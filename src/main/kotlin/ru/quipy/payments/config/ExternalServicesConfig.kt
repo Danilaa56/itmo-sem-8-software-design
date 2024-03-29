@@ -10,11 +10,17 @@ import java.time.Duration
 @Configuration
 class ExternalServicesConfig {
     companion object {
-        const val PRIMARY_PAYMENT_BEAN = "PRIMARY_PAYMENT_BEAN"
+        const val ACCOUNT_1 = "PAYMENT_SERVICE_ACCOUNT_1"
+        const val ACCOUNT_2 = "PAYMENT_SERVICE_ACCOUNT_2"
+        const val ACCOUNT_3 = "PAYMENT_SERVICE_ACCOUNT_3"
+        const val ACCOUNT_4 = "PAYMENT_SERVICE_ACCOUNT_4"
 
         // Ниже приведены готовые конфигурации нескольких аккаунтов провайдера оплаты.
         // Заметьте, что каждый аккаунт обладает своими характеристиками и стоимостью вызова.
 
+        // Throughput sum 113.8
+
+        // Throughput 100
         private val accountProps_1 = ExternalServiceProperties(
             // most expensive. Call costs 100
             "test",
@@ -24,6 +30,7 @@ class ExternalServicesConfig {
             request95thPercentileProcessingTime = Duration.ofMillis(1000),
         )
 
+        // Throughput 10
         private val accountProps_2 = ExternalServiceProperties(
             // Call costs 70
             "test",
@@ -33,6 +40,7 @@ class ExternalServicesConfig {
             request95thPercentileProcessingTime = Duration.ofMillis(10_000),
         )
 
+        // Throughput 3
         private val accountProps_3 = ExternalServiceProperties(
             // Call costs 40
             "test",
@@ -42,6 +50,7 @@ class ExternalServicesConfig {
             request95thPercentileProcessingTime = Duration.ofMillis(10_000),
         )
 
+        // Throughput 0.8
         // Call costs 30
         private val accountProps_4 = ExternalServiceProperties(
             "test",
@@ -52,9 +61,27 @@ class ExternalServicesConfig {
         )
     }
 
-    @Bean(PRIMARY_PAYMENT_BEAN)
-    fun fastExternalService() =
-        PaymentExternalServiceImpl(
-            accountProps_4,
-        )
+    @Bean(ACCOUNT_1)
+    fun account1() =
+            PaymentExternalServiceImpl(
+                    accountProps_1,
+            )
+
+    @Bean(ACCOUNT_2)
+    fun account2() =
+            PaymentExternalServiceImpl(
+                    accountProps_2,
+            )
+
+    @Bean(ACCOUNT_3)
+    fun account3() =
+            PaymentExternalServiceImpl(
+                    accountProps_3,
+            )
+
+    @Bean(ACCOUNT_4)
+    fun account4() =
+            PaymentExternalServiceImpl(
+                    accountProps_4,
+            )
 }
