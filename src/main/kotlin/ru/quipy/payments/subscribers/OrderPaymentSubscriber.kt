@@ -15,6 +15,7 @@ import ru.quipy.payments.logic.*
 import ru.quipy.streams.AggregateSubscriptionsManager
 import ru.quipy.streams.annotation.RetryConf
 import ru.quipy.streams.annotation.RetryFailedStrategy
+import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
 import javax.annotation.PostConstruct
@@ -57,6 +58,7 @@ class OrderPaymentSubscriber {
 
     @PostConstruct
     fun init() {
+        val paymentServices = listOf(paymentService4, paymentService3, paymentService2)
         subscriptionsManager.createSubscriber(OrderAggregate::class, "payments:order-subscriber", retryConf = RetryConf(1, RetryFailedStrategy.SKIP_EVENT)) {
             `when`(OrderPaymentStartedEvent::class) { event ->
                 paymentExecutor.submit {
@@ -69,18 +71,21 @@ class OrderPaymentSubscriber {
                     }
                     logger.info("Payment ${createdEvent.paymentId} for order ${event.orderId} created.")
 
-                    val chosenPaymentService = if (paymentService2.canProcess(createdEvent.paymentId, event.amount, event.createdAt)) {
-                        paymentService2
-                    } else if (paymentService1.canProcess(createdEvent.paymentId, event.amount, event.createdAt)) {
-                        paymentService1
-                    } else {
-                        null
+                    var chosenPaymentService: PaymentService? = null
+                    for (paymentService in paymentServices) {
+                        if (paymentService.canProcess(createdEvent.paymentId, event.amount, event.createdAt)) {
+                            chosenPaymentService = paymentService
+                            break
+                        }
                     }
                     if (chosenPaymentService != null) {
                         chosenPaymentService.submitPaymentRequest(createdEvent.paymentId, event.amount, event.createdAt)
                     } else {
                         logger.error("Could not choose account for payment: ${createdEvent.paymentId}")
 
+                        paymentESService.update(createdEvent.paymentId) {
+                            it.logSubmission(success = false, UUID.randomUUID(), now(), Duration.ofMillis(now() - event.createdAt))
+                        }
                         paymentESService.update(createdEvent.paymentId) {
                             it.logProcessing(false, now(), null, reason = "Could not choose account for payment")
                         }
