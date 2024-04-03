@@ -38,9 +38,6 @@ class PaymentExternalServiceImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val nonBlockingOngoingWindow = NonBlockingOngoingWindow(properties.parallelRequests)
-    private val rateLimiter = RateLimiter(properties.rateLimitPerSec)
-
     private val callbackExecutor = Executors.newFixedThreadPool(16)
 
     @Autowired
@@ -91,7 +88,6 @@ class PaymentExternalServiceImpl(
 
             submitHttpRequest(paymentId, request, transactionId)
         } catch (e: Exception) {
-            nonBlockingOngoingWindow.releaseWindow()
         }
     }
 
@@ -101,7 +97,6 @@ class PaymentExternalServiceImpl(
         try {
             client.newCall(request).enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
-                    nonBlockingOngoingWindow.releaseWindow()
                     curRequestsCount.decrementAndGet()
                     callbackExecutor.submit {
                         fail(e, paymentId, transactionId)
@@ -109,7 +104,6 @@ class PaymentExternalServiceImpl(
                 }
 
                 override fun onResponse(call: Call, response: Response) {
-                    nonBlockingOngoingWindow.releaseWindow()
                     curRequestsCount.decrementAndGet()
                     callbackExecutor.submit {
                         processResponse(response, transactionId, paymentId)
@@ -117,7 +111,6 @@ class PaymentExternalServiceImpl(
                 }
             })
         } catch (e: Exception) {
-            nonBlockingOngoingWindow.releaseWindow()
             curRequestsCount.decrementAndGet()
             fail(e, paymentId, transactionId)
         }
