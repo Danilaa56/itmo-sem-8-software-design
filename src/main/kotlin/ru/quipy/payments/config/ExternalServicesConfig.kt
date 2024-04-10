@@ -25,7 +25,7 @@ class ExternalServicesConfig {
             // most expensive. Call costs 100
             "test",
             "default-1",
-            parallelRequests = 10000,
+            parallelRequests = 1000,
             rateLimitPerSec = 100,
             request95thPercentileProcessingTime = Duration.ofMillis(1000),
         )
@@ -35,9 +35,9 @@ class ExternalServicesConfig {
             // Call costs 70
             "test",
             "default-2",
-            parallelRequests = 100,
-            rateLimitPerSec = 30,
-            request95thPercentileProcessingTime = Duration.ofMillis(10_000),
+            parallelRequests = 130,
+            rateLimitPerSec = 50,
+            request95thPercentileProcessingTime = Duration.ofMillis(5_000),
         )
 
         // Throughput 3
@@ -45,8 +45,8 @@ class ExternalServicesConfig {
             // Call costs 40
             "test",
             "default-3",
-            parallelRequests = 30,
-            rateLimitPerSec = 8,
+            parallelRequests = 35,
+            rateLimitPerSec = 10,
             request95thPercentileProcessingTime = Duration.ofMillis(10_000),
         )
 
@@ -55,8 +55,8 @@ class ExternalServicesConfig {
         private val accountProps_4 = ExternalServiceProperties(
             "test",
             "default-4",
-            parallelRequests = 8,
-            rateLimitPerSec = 5,
+            parallelRequests = 15,
+            rateLimitPerSec = 10,
             request95thPercentileProcessingTime = Duration.ofMillis(10_000),
         )
     }

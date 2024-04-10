@@ -2,10 +2,12 @@ package ru.quipy.payments.logic
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry
 import okhttp3.*
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
-import ru.quipy.common.utils.NonBlockingOngoingWindow
+import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.common.utils.RateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
@@ -14,13 +16,15 @@ import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
 
 // Advice: always treat time as a Duration
 class PaymentExternalServiceImpl(
-        private val properties: ExternalServiceProperties,
+        properties: ExternalServiceProperties,
 ) : PaymentExternalService {
 
     companion object {
@@ -30,6 +34,15 @@ class PaymentExternalServiceImpl(
 
         val emptyBody = RequestBody.create(null, ByteArray(0))
         val mapper = ObjectMapper().registerKotlinModule()
+
+        val circuitBreakerConfig = CircuitBreakerConfig.custom()
+                .failureRateThreshold(20f)
+                .waitDurationInOpenState(Duration.ofMillis(2000))
+                .permittedNumberOfCallsInHalfOpenState(2)
+                .slidingWindowSize(2)
+                .recordExceptions(IOException::class.java, TimeoutException::class.java)
+                .build()
+        val circuitBreakerRegistry = CircuitBreakerRegistry.of(circuitBreakerConfig)
     }
 
     private val serviceName = properties.serviceName
@@ -38,12 +51,17 @@ class PaymentExternalServiceImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
 
-    private val callbackExecutor = Executors.newFixedThreadPool(16)
+    private val callbackExecutor = Executors.newFixedThreadPool(
+            16, NamedThreadFactory("callback-$serviceName-$accountName")
+    )
 
     @Autowired
     private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
 
-    private val httpClientExecutor = Executors.newFixedThreadPool(min(200, parallelRequests))
+    private val httpClientExecutor = Executors.newFixedThreadPool(
+            min(200, parallelRequests),
+            NamedThreadFactory("http-$serviceName-$accountName")
+    )
     private val curRequestsCount = AtomicInteger()
 
     private val client = OkHttpClient.Builder().run {
@@ -55,6 +73,19 @@ class PaymentExternalServiceImpl(
         build()
     }
 
+    private val rateLimiter = RateLimiter(rateLimitPerSec)
+    private val circuitBreaker = circuitBreakerRegistry.circuitBreaker("$serviceName-$accountName")
+
+    init {
+        circuitBreaker.eventPublisher
+                .onError {
+                    logger.error("$it")
+                }
+                .onStateTransition {
+                    logger.error("$it")
+                }
+    }
+
     override fun canProcess(paymentId: UUID, amount: Int, paymentStartedAt: Long): Boolean {
         val weHaveTime = paymentOperationTimeout.toMillis() - (now() - paymentStartedAt)
         if (requestAverageProcessingTime.toMillis() > weHaveTime) {
@@ -63,6 +94,9 @@ class PaymentExternalServiceImpl(
         val timeToProcessExistingQueue = curRequestsCount.toLong() / min(parallelRequests.toDouble() / requestAverageProcessingTime.toMillis(), rateLimitPerSec.toDouble())
         logger.info("[[paymentId: {}]] we have {} ms, queue will take {} ms, queue size {}", paymentId, weHaveTime, timeToProcessExistingQueue, curRequestsCount.get())
         if (timeToProcessExistingQueue + requestAverageProcessingTime.toMillis() > weHaveTime) {
+            return false
+        }
+        if (!circuitBreaker.tryAcquirePermission()) {
             return false
         }
         return true
@@ -95,21 +129,24 @@ class PaymentExternalServiceImpl(
         curRequestsCount.incrementAndGet();
         logger.info("[$paymentId, $accountName]: submitting request into queue")
         try {
-            client.newCall(request).enqueue(object : Callback {
-                override fun onFailure(call: Call, e: IOException) {
-                    curRequestsCount.decrementAndGet()
-                    callbackExecutor.submit {
-                        fail(e, paymentId, transactionId)
-                    }
-                }
-
-                override fun onResponse(call: Call, response: Response) {
-                    curRequestsCount.decrementAndGet()
+            httpClientExecutor.submit {
+                rateLimiter.tickBlocking()
+                val start = now()
+                try {
+                    val response = client.newCall(request).execute()
+                    circuitBreaker.onSuccess(now() - start, TimeUnit.MILLISECONDS)
                     callbackExecutor.submit {
                         processResponse(response, transactionId, paymentId)
                     }
+                } catch (e: Exception) {
+                    circuitBreaker.onError(now() - start, TimeUnit.MILLISECONDS, e)
+                    callbackExecutor.submit {
+                        fail(e, paymentId, transactionId)
+                    }
+                } finally {
+                    curRequestsCount.decrementAndGet()
                 }
-            })
+            }
         } catch (e: Exception) {
             curRequestsCount.decrementAndGet()
             fail(e, paymentId, transactionId)
@@ -150,6 +187,8 @@ class PaymentExternalServiceImpl(
                 paymentESService.update(paymentId) {
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
+            } catch (e: Exception) {
+                logger.error("Unexpected exception: ", e)
             } finally {
                 logger.info("[[$paymentId, $accountName]] response processed")
             }
