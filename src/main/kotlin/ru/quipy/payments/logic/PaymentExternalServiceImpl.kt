@@ -122,6 +122,7 @@ class PaymentExternalServiceImpl(
 
             submitHttpRequest(paymentId, request, transactionId)
         } catch (e: Exception) {
+            logger.error("failed to submit payment", e)
         }
     }
 
@@ -149,7 +150,9 @@ class PaymentExternalServiceImpl(
             }
         } catch (e: Exception) {
             curRequestsCount.decrementAndGet()
-            fail(e, paymentId, transactionId)
+            callbackExecutor.submit {
+                fail(e, paymentId, transactionId)
+            }
         }
     }
 
